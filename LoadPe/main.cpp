@@ -3,6 +3,10 @@
 #include <fstream>
 #include <filesystem>
 
+/*
+	https://thunderjie.github.io/2019/03/27/PE%E7%BB%93%E6%9E%84%E8%AF%A6%E8%A7%A3/
+*/
+
 int main()
 {
 	_IMAGE_DOS_HEADER;
