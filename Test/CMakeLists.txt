@@ -11,7 +11,7 @@ target_include_directories(Test INTERFACE "./")
 #依赖库
 target_link_libraries(Test 
 PRIVATE 
-
+    TestDll
 PUBLIC
 
     )

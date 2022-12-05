@@ -86,10 +86,13 @@ void WriteSections(char* virtual_address, char* file_buffer, _IMAGE_NT_HEADERS64
 		名称
 		地址
 */
-template<typename _Ty>
-_Ty ReadExportAddressData(char* virtual_address, DWORD rva, int idx) {
-	DWORD* address_ary = (DWORD*)(virtual_address + rva);
+template<typename _Ty,typename _OffsetTy = DWORD>
+_Ty ReadExportAddressData(char* virtual_address, DWORD rva, int idx,bool ret_target_val = false) {
+	_OffsetTy* address_ary = (_OffsetTy*)(virtual_address + rva);
 	auto target_address = address_ary[idx];
+	if (ret_target_val) {
+		return (_Ty)target_address;
+	}
 	return (_Ty)(virtual_address + target_address);
 }
 
@@ -108,21 +111,23 @@ GetExportList(char* virtual_address, char* file_buffer, _IMAGE_NT_HEADERS64* pe)
 	IMAGE_EXPORT_DIRECTORY* export_directory = (IMAGE_EXPORT_DIRECTORY*)(virtual_address + virtual_range.VirtualAddress);
 
 	for (auto i = 0u; i < export_directory->NumberOfNames; ++i) {
+
+		/*读取导出*/
 		auto name = ReadExportAddressData<char*>(virtual_address, export_directory->AddressOfNames, i);
-		auto id = *ReadExportAddressData<DWORD*>(virtual_address, export_directory->AddressOfNameOrdinals, i);
-		auto fun_rva = *ReadExportAddressData<DWORD*>(virtual_address, export_directory->AddressOfFunctions, i);
+		auto id = ReadExportAddressData<WORD, WORD>(virtual_address, export_directory->AddressOfNameOrdinals, i, true);
+		auto fun_rva = ReadExportAddressData<size_t>(virtual_address, export_directory->AddressOfFunctions, id);
 
-
-		int number = 10;
-		/*res_list.emplace(
-			"",
-			{
-				
+		res_list.emplace(
+			name,
+			ExportFunPack{
+				id
+				,name
+				,fun_rva
 			}
-		)*/
+		);
 	}
 
-	return {};
+	return res_list;
 }
 
 
