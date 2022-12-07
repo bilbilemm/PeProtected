@@ -406,6 +406,12 @@ char* RunPe(const std::string& file) {
 		auto pe = (_IMAGE_NT_HEADERS64*)(virtual_addr + dos->e_lfanew);
 
 		FixImportModule(virtual_addr, pe);
+
+
+		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
+			int number = 10;
+		}
+
 		FixImageBaseOffset(virtual_addr, pe);
 
 		enter_point = (void(*)())(virtual_addr + pe->OptionalHeader.AddressOfEntryPoint);
@@ -427,14 +433,6 @@ char* RunPe(const std::string& file) {
 	}
 
 	std::cout << "load pe: " << file <<" call enter_point: " << (void*)((size_t)enter_point - (size_t)virtual_addr) << std::endl;
-
-	if (file == "TestDll.dll") {
-		int number = 10;
-	}
-
-	if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
-		int number = 10;
-	}
 
 	if ((char*)enter_point not_eq virtual_addr) {
 		enter_point();
