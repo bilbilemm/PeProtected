@@ -435,7 +435,13 @@ char* RunPe(const std::string& file) {
 	std::cout << "load pe: " << file <<" call enter_point: " << (void*)((size_t)enter_point - (size_t)virtual_addr) << std::endl;
 
 	if ((char*)enter_point not_eq virtual_addr) {
-		enter_point();
+		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
+			enter_point();
+		}
+		else {
+			enter_point();
+		}
+		
 	}
 
 	cache[file] = virtual_addr;
