@@ -73,7 +73,8 @@ bool IsPe64(std::string name) {
 	}
 	 
 	if (not std::filesystem::exists(name)) {
-		throw "ispe64 mpt find finame";
+		std::cout << "********** IsPe64 not find name: " << name << std::endl;
+		return false;
 	}
 
 	return IsPe64Impl(name);
@@ -102,15 +103,10 @@ void WritePeHeard(char* virtual_address, char* file_buffer, _Ty* pe) {
 */
 DWORD ConvertSectionRole(_IMAGE_SECTION_HEADER* section) {
 	DWORD convert_res = {};
-	if (section->Characteristics & IMAGE_SCN_MEM_WRITE) {
-		convert_res &= PAGE_READWRITE;
-	}
-	if (section->Characteristics & IMAGE_SCN_MEM_READ) {
-		convert_res &= PAGE_READONLY;
-	}
-	if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE) {
-		convert_res &= PAGE_EXECUTE;
-	}
+	
+	convert_res = section->Characteristics & IMAGE_SCN_MEM_WRITE ?
+		section->Characteristics & IMAGE_SCN_MEM_EXECUTE ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE
+		: section->Characteristics & IMAGE_SCN_MEM_EXECUTE ? PAGE_EXECUTE_READ : PAGE_READONLY;
 	return convert_res;
 }
 
@@ -200,37 +196,37 @@ template<typename _Ty>
 char* LoadModle(std::string name) {
 
 	if (std::filesystem::exists("C:/Windows/System32/" + name)) {
-		if (IsPe64Impl("C:/Windows/System32/" + name) == MainIs64) {
+		if (IsPe64("C:/Windows/System32/" + name) == MainIs64) {
 			name = "C:/Windows/System32/" + name;
 		}
 	}
 
 	if (std::filesystem::exists("C:/Windows/SysWOW64/" + name) and not MainIs64) {
-		if (IsPe64Impl("C:/Windows/SysWOW64/" + name) == MainIs64) {
+		if (IsPe64("C:/Windows/SysWOW64/" + name) == MainIs64) {
 			name = "C:/Windows/SysWOW64/" + name;
 		}
 	}
 
 	if (std::filesystem::exists("C:/Windows/System32/downlevel/" + name)) {
-		if (IsPe64Impl("C:/Windows/System32/downlevel/" + name) == MainIs64) {
+		if (IsPe64("C:/Windows/System32/downlevel/" + name) == MainIs64) {
 			name = "C:/Windows/System32/downlevel/" + name;
 		}
 	}
 
 	if (std::filesystem::exists("C:/Windows/SysWOW64/downlevel/" + name) and not MainIs64) {
-		if (IsPe64Impl("C:/Windows/SysWOW64/downlevel/" + name) == MainIs64) {
+		if (IsPe64("C:/Windows/SysWOW64/downlevel/" + name) == MainIs64) {
 			name = "C:/Windows/SysWOW64/downlevel/" + name;
 		}
 	}
 
 	if (std::filesystem::exists(kProjectSourceDir"build_windows/bin/Debug/" + name)) {
-		if (IsPe64Impl(kProjectSourceDir"build_windows/bin/Debug/" + name) == MainIs64) {
+		if (IsPe64(kProjectSourceDir"build_windows/bin/Debug/" + name) == MainIs64) {
 			name = kProjectSourceDir"build_windows/bin/Debug/" + name;
 		}
 	}
 
 	if (not std::filesystem::exists(name)) {
-		throw "ispe64 mpt find finame";
+		std::cout << "********** LoadModle not find name: " << name << std::endl;
 		return nullptr;
 	}
 	
@@ -255,6 +251,11 @@ char* LoadModle(std::string name) {
 template<typename _ModuleTy,typename _SelfPeType>
 void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_descriptor) {
 	auto module_vir_address = RunPe((char*)(virtual_address + import_descriptor.Name));
+
+	if (module_vir_address == nullptr) {
+		return;
+	}
+
 	auto module_dos = (_IMAGE_DOS_HEADER*)module_vir_address;
 	auto module_pe = (_ModuleTy*)(module_vir_address + module_dos->e_lfanew);
 
@@ -285,7 +286,7 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 		else {
 			/*数据是索引*/
 			auto iter = std::find_if(module_export.begin(), module_export.end(), [&](const ExportFunPack& pack) {
-				return pack.idx == lookup_addr;
+				return pack.idx == (char)lookup_addr;
 				});
 			if (iter not_eq module_export.end()) {
 				func_addr = iter->virtual_address;
@@ -294,7 +295,12 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 				throw "can't find import ordinal";
 			}
 		}
+		DWORD back_protect;
+		VirtualProtect(&address_table[i], sizeof(IMAGE_THUNK_DATA_TYPE), PAGE_READWRITE, &back_protect);
+
 		address_table[i].u1.Function = (decltype(address_table[i].u1.Function))func_addr;
+
+		VirtualProtect(&address_table[i], sizeof(IMAGE_THUNK_DATA_TYPE), back_protect, &back_protect);
 	}
 
 }
@@ -356,7 +362,12 @@ void FixImageBaseOffset(char* virtual_address, _Ty* pe) {
 			case IMAGE_REL_BASED_HIGHLOW:
 			case IMAGE_REL_BASED_DIR64:
 				{
+					DWORD back_protect;
+					VirtualProtect(change_addr, sizeof(BitDataType), PAGE_READWRITE, &back_protect);
+
 					*change_addr += delta_va_reloc;
+
+					VirtualProtect(change_addr, sizeof(BitDataType), back_protect, &back_protect);
 				}
 				break;
 			case IMAGE_REL_BASED_ABSOLUTE:
@@ -374,15 +385,22 @@ void FixImageBaseOffset(char* virtual_address, _Ty* pe) {
 }
 
 char* RunPe(const std::string& file) {
+
+	static std::unordered_map<std::string, char*> cache = {};
+
+	if (cache.contains(file)) {
+		return cache[file];
+	}
+
 	char* virtual_addr = nullptr;
 	void(*enter_point)() = nullptr;
 
-	if (file == "ucrtbased.dll") {
-		int number = 10;
-	}
-
 	if (MainIs64) {
 		virtual_addr = LoadModle<_IMAGE_NT_HEADERS64>(file);
+		if (virtual_addr == nullptr) {
+			cache[file] = virtual_addr;
+			return virtual_addr;
+		}
 
 		auto dos = (_IMAGE_DOS_HEADER*)virtual_addr;
 		auto pe = (_IMAGE_NT_HEADERS64*)(virtual_addr + dos->e_lfanew);
@@ -394,6 +412,10 @@ char* RunPe(const std::string& file) {
 	}
 	else {
 		virtual_addr = LoadModle<_IMAGE_NT_HEADERS>(file);
+		if (virtual_addr == nullptr) {
+			cache[file] = virtual_addr;
+			return virtual_addr;
+		}
 
 		auto dos = (_IMAGE_DOS_HEADER*)virtual_addr;
 		auto pe = (_IMAGE_NT_HEADERS*)(virtual_addr + dos->e_lfanew);
@@ -406,9 +428,19 @@ char* RunPe(const std::string& file) {
 
 	std::cout << "load pe: " << file <<" call enter_point: " << (void*)((size_t)enter_point - (size_t)virtual_addr) << std::endl;
 
+	if (file == "TestDll.dll") {
+		int number = 10;
+	}
+
+	if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
+		int number = 10;
+	}
+
 	if ((char*)enter_point not_eq virtual_addr) {
 		enter_point();
 	}
+
+	cache[file] = virtual_addr;
 
 	return virtual_addr;
 }
