@@ -252,6 +252,17 @@ template<typename _ModuleTy,typename _SelfPeType>
 void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_descriptor) {
 	auto module_vir_address = RunPe((char*)(virtual_address + import_descriptor.Name));
 
+	if ((char*)(virtual_address + import_descriptor.Name) == std::string("KERNEL32.dll"))
+	{
+		int number = 10;
+	}
+
+	if ((char*)(virtual_address + import_descriptor.Name) == std::string("api-ms-win-core-sysinfo-l1-1-0.dll"))
+	{
+		int number = 10;
+	}
+
+	
 	if (module_vir_address == nullptr) {
 		return;
 	}
@@ -276,6 +287,9 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 			auto iter = std::find_if(module_export.begin(), module_export.end(), [&](const ExportFunPack & pack) {
 				return pack.name == (char*)image_import->Name;
 				});
+			if ((char*)image_import->Name == std::string("GetSystemTimeAsFileTime")) {
+				int number = 10;
+			}
 			if (iter not_eq module_export.end()) {
 				func_addr = iter->virtual_address;
 			}
