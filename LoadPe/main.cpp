@@ -20,6 +20,7 @@
 
 	×ª·¢º¯Êý
 	http://www.pnpon.com/article/detail-37.html
+	https://learn.microsoft.com/en-us/windows/win32/apiindex/windows-apisets
 */
 
 DWORD old_protect = {};
