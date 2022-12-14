@@ -17,6 +17,9 @@
 
 	memory load dll
 	https://www.joachim-bauch.de/tutorials/loading-a-dll-from-memory/
+
+	×ª·¢º¯Êý
+	http://www.pnpon.com/article/detail-37.html
 */
 
 DWORD old_protect = {};
