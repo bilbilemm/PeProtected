@@ -21,12 +21,24 @@
 	转发函数
 	http://www.pnpon.com/article/detail-37.html
 	https://learn.microsoft.com/en-us/windows/win32/apiindex/windows-apisets
+
+	api set
+	https://chromium.googlesource.com/external/github.com/DynamoRIO/dynamorio/+/cronbuild-7.0.17744/core/win32/loader.c
 */
 
 DWORD old_protect = {};
 bool MainIs64 = {};
 
 char* RunPe(const std::string& file);
+
+const char* FindPathAry[] = {
+	"C:/Windows/System32/"
+	,"C:/Windows/SysWOW64/"
+	,"C:/Windows/System32/downlevel/"
+	,"C:/Windows/SysWOW64/downlevel/"
+	,kProjectSourceDir"build_windows/bin/Debug/"
+	,"C:/Windows Kits/10/Redist/10.0.18362.0/ucrt/DLLs/x64/"
+};
 
 bool IsPe64Impl(std::string name) {
 	auto file_size = std::filesystem::file_size(name);
@@ -44,37 +56,21 @@ bool IsPe64Impl(std::string name) {
 
 	return res;
 }
+std::string MakePath(std::string name)
+{
+	for (auto path : FindPathAry) {
+		if(std::filesystem::exists(path + name)) {
+			if (IsPe64Impl(path + name) == MainIs64) {
+				name = path + name;
+			}
+		}
+	}
+
+	return name;
+}
 bool IsPe64(std::string name) {
 
-	if (std::filesystem::exists("C:/Windows/System32/" + name)) {
-		if (IsPe64Impl("C:/Windows/System32/" + name) == MainIs64) {
-			name = "C:/Windows/System32/" + name;
-		}
-	}
-	
-	if (std::filesystem::exists("C:/Windows/SysWOW64/" + name) and not MainIs64) {
-		if (IsPe64Impl("C:/Windows/SysWOW64/" + name) == MainIs64) {
-			name = "C:/Windows/SysWOW64/" + name;
-		}
-	}
-
-	if (std::filesystem::exists("C:/Windows/System32/downlevel/" + name)) {
-		if (IsPe64Impl("C:/Windows/System32/downlevel/" + name) == MainIs64) {
-			name = "C:/Windows/System32/downlevel/" + name;
-		}
-	}
-
-	if (std::filesystem::exists("C:/Windows/SysWOW64/downlevel/" + name) and not MainIs64) {
-		if (IsPe64Impl("C:/Windows/SysWOW64/downlevel/" + name) == MainIs64) {
-			name = "C:/Windows/SysWOW64/downlevel/" + name;
-		}
-	}
-	
-	if (std::filesystem::exists(kProjectSourceDir"build_windows/bin/Debug/" + name)) {
-		if (IsPe64Impl(kProjectSourceDir"build_windows/bin/Debug/" + name) == MainIs64) {
-			name = kProjectSourceDir"build_windows/bin/Debug/" + name;
-		}
-	}
+	name = MakePath(name);
 	 
 	if (not std::filesystem::exists(name)) {
 		std::cout << "********** IsPe64 not find name: " << name << std::endl;
@@ -82,6 +78,269 @@ bool IsPe64(std::string name) {
 	}
 
 	return IsPe64Impl(name);
+}
+bool IsForwardApi(std::string name) {
+	const char* cmp_str = "api-ms-win";
+	return std::memcmp(name.c_str(), cmp_str, std::strlen(cmp_str)) == 0;
+}
+
+bool
+str_case_prefix(const char* str, const char* pfx)
+{
+	while (true) {
+		if (*pfx == '\0')
+			return true;
+		if (*str == '\0')
+			return false;
+		if (tolower(*str) != tolower(*pfx))
+			return false;
+		str++;
+		pfx++;
+	}
+	return false;
+}
+
+static const char*
+map_api_set_dll(const char* name, std::string dependent)
+{
+	/* Ideally we would read apisetschema.dll ourselves.
+	 * It seems to be mapped in at 0x00040000.
+	 * But this is simpler than trying to parse that dll's table.
+	 * We ignore the version suffix ("-1-0", e.g.).
+	 */
+	if (str_case_prefix(name, "API-MS-Win-Core-APIQuery-L1"))
+		return "ntdll.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Console-L1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-DateTime-L1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-DelayLoad-L1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Debug-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-ErrorHandling-L1")) {
+		/* This one includes {,Set}UnhandledExceptionFilter which are only in
+		 * kernel32, but kernel32 itself imports GetLastError, etc.  which must come
+		 * from kernelbase to avoid infinite loop.  XXX: what does apisetschema say?
+		 * dependent on what's imported?
+		 */
+		if (str_case_prefix(dependent.c_str(), "kernel32.dll"))
+			return "kernelbase.dll";
+		else
+			return "kernel32.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-Core-Fibers-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-File-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Handle-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Heap-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Interlocked-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-IO-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Localization-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-LocalRegistry-L1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-LibraryLoader-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Memory-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Misc-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-NamedPipe-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-ProcessEnvironment-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-ProcessThreads-L1")) {
+		/* This one includes CreateProcessAsUserW which is only in
+		 * kernel32, but kernel32 itself imports from here and its must come
+		 * from kernelbase to avoid infinite loop.  XXX: see above: seeming
+		 * more and more like it depends on what's imported.
+		 */
+		if (str_case_prefix(dependent.c_str(), "kernel32.dll"))
+			return "kernelbase.dll";
+		else
+			return "kernel32.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-Core-Profile-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-RTLSupport-L1")) {
+		if (true ||
+			(str_case_prefix(dependent.c_str(), "kernel.dll")))
+			return "ntdll.dll";
+		else
+			return "kernel32.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-Core-String-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Synch-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-SysInfo-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-ThreadPool-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-XState-L1"))
+		return "ntdll.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Util-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Security-Base-L1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Security-LSALookup-L1"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Security-SDDL-L1"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Service-Core-L1"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Service-Management-L1"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Service-Management-L2"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Service-Winsvc-L1"))
+		return "sechost.dll";
+	/**************************************************/
+	/* Added in Win8 */
+	else if (str_case_prefix(name, "API-MS-Win-Core-Kernel32-Legacy-L1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Appcompat-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-BEM-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Comm-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Console-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-File-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Job-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Localization-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Localization-Private-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Namespace-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Normalization-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-ProcessTopology-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Psapi-Ansi-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Psapi-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Psapi-Obsolete-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Realtime-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Registry-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-SideBySide-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-String-Obsolete-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-SystemTopology-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Threadpool-Legacy-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Threadpool-Private-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Timezone-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-WOW64-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-WindowsErrorReporting-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Security-Appcontainer-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Security-Base-Private-L1-1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-Heap-Obsolete-L1-1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-CRT-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-CRT-L2-1"))
+		return "msvcrt.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Service-Private-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Security-Audit-L1-1"))
+		return "sechost.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Eventing-Controller-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Eventing-Consumer-L1-1")) {
+		/* i#1528: moved to sechost.dll on win8.1 */
+		if (true)
+			return "sechost.dll";
+		else
+			return "kernelbase.dll";
+	}
+	/**************************************************/
+	/* Added in Win8.1 */
+	else if (str_case_prefix(name, "API-MS-Win-Core-ProcessTopology-L1-2") ||
+		str_case_prefix(name, "API-MS-Win-Core-XState-L2-1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-WIN-SECURITY-LSAPOLICY-L1"))
+		return "advapi32.dll";
+	/**************************************************/
+	/* Added in Win10 (some may be 8.1 too) */
+	else if (str_case_prefix(name, "API-MS-Win-Core-Console-L2-2") ||
+		str_case_prefix(name, "API-MS-Win-Core-Console-L3-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Console-L3-2") ||
+		str_case_prefix(name, "API-MS-Win-Core-Enclave-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Fibers-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Heap-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-LargeInteger-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-LibraryLoader-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Localization-Obsolete-L1-2") ||
+		str_case_prefix(name, "API-MS-Win-Core-Localization-Obsolete-L1-3") ||
+		str_case_prefix(name, "API-MS-Win-Core-Path-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-PerfCounters-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-ProcessSnapshot-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Psm-Key-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Quirks-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-RegistryUserSpecific-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-SHLWAPI-Legacy-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-SHLWAPI-Obsolete-L1-2") ||
+		str_case_prefix(name, "API-MS-Win-Core-String-L2-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-StringAnsi-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-URL-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Version-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-VersionAnsi-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Eventing-Provider-L1-1"))
+		return "kernelbase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-PrivateProfile-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-Atoms-L1-1"))
+		return "kernel32.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Core-WinRT-Error-L1-1"))
+		return "combase.dll";
+	else if (str_case_prefix(name, "API-MS-Win-Appmodel-Runtime-L1-1"))
+		return "kernel.appcore.dll";
+	else if (str_case_prefix(name, "API-MS-Win-GDI-")) {
+		/* We've seen many different GDI-* */
+		return "gdi32full.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-CRT-")) {
+		/* We've seen CRT-{String,Runtime,Private} */
+		return "ucrtbase.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-Core-COM-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-COM-Private-L1-1") ||
+		str_case_prefix(name, "API-MS-Win-Core-WinRT-String-L1-1")) {
+		return "combase.dll";
+	}
+	else if (str_case_prefix(name, "API-MS-Win-Core-Kernel32-Private-L1-1")) {
+		return "kernel32.dll";
+	}
+	else {
+		throw "unknown API-MS-Win pseudo-dll";
+		/* good guess */
+		return "kernelbase.dll";
+	}
+}
+
+
+struct ForwardInfo {
+	std::string mode_name = {};
+	std::string func_name = {};
+};
+ForwardInfo AnalysisForwardStr(std::string str, std::string origin_module_name) {
+	ForwardInfo ret = {};
+	std::string* cur_str = &ret.mode_name;
+	for (auto c : str) {
+		if (c == '.') {
+			cur_str = &ret.func_name;
+			continue;
+		}
+		cur_str->push_back(c);
+	}
+
+	if (origin_module_name == ret.func_name 
+		and  origin_module_name == "kernel32.dll"
+	) {
+		ret.mode_name = "kernelbase.dll";
+	}
+	else if(origin_module_name == ret.func_name){
+		throw "import module == orgin module";
+	}
+	else {
+		ret.mode_name += ".dll";
+	}
+
+	return ret;
 }
 
 template<typename _Ty>
@@ -197,37 +456,38 @@ GetExportList(char* virtual_address, _Ty* pe) {
 }
 
 template<typename _Ty>
+std::vector<ExportFunPack>
+GetExportListEx(const char* name) {
+	auto module_vir_address = RunPe(name);
+	if (module_vir_address == nullptr) {
+		return {};
+	}
+	auto module_dos = (_IMAGE_DOS_HEADER*)module_vir_address;
+	auto module_pe = (_Ty*)(module_vir_address + module_dos->e_lfanew);
+
+	return GetExportList<_Ty>(module_vir_address, module_pe);
+}
+
+template<typename _Ty>
+ExportFunPack GetExportInfoEx1(const char* name, const char* symbol_name) {
+	auto module_export = GetExportListEx<_Ty>(name);
+	auto iter = std::find_if(module_export.begin(), module_export.end(), [&](const ExportFunPack& pack) {
+		return pack.name == symbol_name;
+		});
+	if (iter not_eq module_export.end()) {
+		return *iter;
+	}
+	else {
+		throw "not find symbol";
+		return {};
+	}
+	
+}
+
+template<typename _Ty>
 char* LoadModle(std::string name) {
 
-	if (std::filesystem::exists("C:/Windows/System32/" + name)) {
-		if (IsPe64("C:/Windows/System32/" + name) == MainIs64) {
-			name = "C:/Windows/System32/" + name;
-		}
-	}
-
-	if (std::filesystem::exists("C:/Windows/SysWOW64/" + name) and not MainIs64) {
-		if (IsPe64("C:/Windows/SysWOW64/" + name) == MainIs64) {
-			name = "C:/Windows/SysWOW64/" + name;
-		}
-	}
-
-	if (std::filesystem::exists("C:/Windows/System32/downlevel/" + name)) {
-		if (IsPe64("C:/Windows/System32/downlevel/" + name) == MainIs64) {
-			name = "C:/Windows/System32/downlevel/" + name;
-		}
-	}
-
-	if (std::filesystem::exists("C:/Windows/SysWOW64/downlevel/" + name) and not MainIs64) {
-		if (IsPe64("C:/Windows/SysWOW64/downlevel/" + name) == MainIs64) {
-			name = "C:/Windows/SysWOW64/downlevel/" + name;
-		}
-	}
-
-	if (std::filesystem::exists(kProjectSourceDir"build_windows/bin/Debug/" + name)) {
-		if (IsPe64(kProjectSourceDir"build_windows/bin/Debug/" + name) == MainIs64) {
-			name = kProjectSourceDir"build_windows/bin/Debug/" + name;
-		}
-	}
+	name = MakePath(name);
 
 	if (not std::filesystem::exists(name)) {
 		std::cout << "********** LoadModle not find name: " << name << std::endl;
@@ -253,28 +513,12 @@ char* LoadModle(std::string name) {
 }
 
 template<typename _ModuleTy,typename _SelfPeType>
-void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_descriptor) {
-	auto module_vir_address = RunPe((char*)(virtual_address + import_descriptor.Name));
+void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_descriptor, const std::string& origin_mode_name) {
 
-	if ((char*)(virtual_address + import_descriptor.Name) == std::string("KERNEL32.dll"))
-	{
-		int number = 10;
+	auto module_export = GetExportListEx<_SelfPeType>((char*)(virtual_address + import_descriptor.Name));
+	if (IsForwardApi((char*)(virtual_address + import_descriptor.Name))) {
+		module_export = GetExportListEx<_SelfPeType>(map_api_set_dll((char*)(virtual_address + import_descriptor.Name), origin_mode_name));
 	}
-
-	if ((char*)(virtual_address + import_descriptor.Name) == std::string("api-ms-win-core-sysinfo-l1-1-0.dll"))
-	{
-		int number = 10;
-	}
-
-	
-	if (module_vir_address == nullptr) {
-		return;
-	}
-
-	auto module_dos = (_IMAGE_DOS_HEADER*)module_vir_address;
-	auto module_pe = (_ModuleTy*)(module_vir_address + module_dos->e_lfanew);
-
-	auto module_export = GetExportList(module_vir_address, module_pe);
 
 	using IMAGE_THUNK_DATA_TYPE = std::conditional_t<std::is_same_v<_SelfPeType, _IMAGE_NT_HEADERS64>, IMAGE_THUNK_DATA64, IMAGE_THUNK_DATA32 >;
 
@@ -291,10 +535,18 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 			auto iter = std::find_if(module_export.begin(), module_export.end(), [&](const ExportFunPack & pack) {
 				return pack.name == (char*)image_import->Name;
 				});
+
 			if ((char*)image_import->Name == std::string("GetSystemTimeAsFileTime")) {
 				int number = 10;
 			}
-			if (iter not_eq module_export.end()) {
+
+			/*转发api*/
+			/*if (IsForwardApi((char*)(virtual_address + import_descriptor.Name))) {
+				auto forward_info = AnalysisForwardStr((char*)iter->virtual_address, origin_mode_name); 
+				auto froward_export_info = GetExportInfoEx1<_SelfPeType>(forward_info.mode_name.c_str(), forward_info.func_name.c_str());
+				func_addr = froward_export_info.virtual_address;
+			}
+			else*/ if (iter not_eq module_export.end()) {
 				func_addr = iter->virtual_address;
 			}
 			else {
@@ -324,7 +576,7 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 }
 
 template<typename _Ty>
-void FixImportModule(char* virtual_address, _Ty* pe) {
+void FixImportModule(char* virtual_address, _Ty* pe, const std::string& origin_mode_name) {
 	auto virtual_range = pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 	
 	if (virtual_range.VirtualAddress == 0) {
@@ -339,12 +591,14 @@ void FixImportModule(char* virtual_address, _Ty* pe) {
 			FixImportModuleImpl<_IMAGE_NT_HEADERS64, _Ty>(
 				virtual_address
 				, import_descriptor[i]
+				, origin_mode_name
 				);
 		}
 		else {
 			FixImportModuleImpl<_IMAGE_NT_HEADERS, _Ty>(
 				virtual_address
 				, import_descriptor[i]
+				, origin_mode_name
 				);
 		}                 
 	}
@@ -420,10 +674,12 @@ char* RunPe(const std::string& file) {
 			return virtual_addr;
 		}
 
+		cache[file] = virtual_addr;
+
 		auto dos = (_IMAGE_DOS_HEADER*)virtual_addr;
 		auto pe = (_IMAGE_NT_HEADERS64*)(virtual_addr + dos->e_lfanew);
 
-		FixImportModule(virtual_addr, pe);
+		FixImportModule(virtual_addr, pe, file);
 
 
 		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
@@ -441,10 +697,12 @@ char* RunPe(const std::string& file) {
 			return virtual_addr;
 		}
 
+		cache[file] = virtual_addr;
+
 		auto dos = (_IMAGE_DOS_HEADER*)virtual_addr;
 		auto pe = (_IMAGE_NT_HEADERS*)(virtual_addr + dos->e_lfanew);
 
-		FixImportModule(virtual_addr, pe);
+		FixImportModule(virtual_addr, pe, file);
 		FixImageBaseOffset(virtual_addr, pe);
 
 		enter_point = (void(*)())(virtual_addr + pe->OptionalHeader.AddressOfEntryPoint);
@@ -461,8 +719,6 @@ char* RunPe(const std::string& file) {
 		}
 		
 	}
-
-	cache[file] = virtual_addr;
 
 	return virtual_addr;
 }
