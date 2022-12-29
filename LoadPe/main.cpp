@@ -501,7 +501,7 @@ GetExportListEx(std::string name) {
 	auto export_list = GetExportList<_Ty>(module_vir_address, module_pe);
 	
 	/*ntdll 导出定位到.自己的进程*/
-	if (name == "ntdll.dll") {
+	if (true or name == "ntdll.dll") {
 		auto module_hd = LoadLibrary(name.c_str());
 		for (auto& export_info : export_list) {
 			export_info.virtual_address = (size_t)GetProcAddress(module_hd, export_info.name.c_str());
@@ -763,7 +763,7 @@ char* RunPe(std::string file) {
 	std::cout << "load pe: " << file <<" call enter_point: " << (void*)((size_t)enter_point - (size_t)virtual_addr) << std::endl;
 
 	if ((char*)enter_point not_eq virtual_addr) {
-		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
+		if (std::filesystem::path(file).extension() == ".exe") {
 			enter_point();
 		}
 		else if (std::filesystem::path(file).extension() == ".dll") {
