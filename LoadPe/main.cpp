@@ -490,15 +490,28 @@ GetExportList(char* virtual_address, _Ty* pe) {
 
 template<typename _Ty>
 std::vector<ExportFunPack>
-GetExportListEx(const char* name) {
-	auto module_vir_address = RunPe(name);
+GetExportListEx(std::string name) {
+	auto module_vir_address = RunPe(name.c_str());
 	if (module_vir_address == nullptr) {
 		return {};
 	}
 	auto module_dos = (_IMAGE_DOS_HEADER*)module_vir_address;
 	auto module_pe = (_Ty*)(module_vir_address + module_dos->e_lfanew);
 
-	return GetExportList<_Ty>(module_vir_address, module_pe);
+	auto export_list = GetExportList<_Ty>(module_vir_address, module_pe);
+	
+	/*ntdll 导出定位到.自己的进程*/
+	if (name == "ntdll.dll") {
+		auto module_hd = LoadLibrary(name.c_str());
+		for (auto& export_info : export_list) {
+			export_info.virtual_address = (size_t)GetProcAddress(module_hd, export_info.name.c_str());
+			if (not export_info.virtual_address) {
+				throw "ntdll symbol not found";
+			}
+		}
+		
+	}
+	return export_list;
 }
 
 template<typename _Ty>
@@ -752,15 +765,6 @@ char* RunPe(std::string file) {
 	if ((char*)enter_point not_eq virtual_addr) {
 		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
 			enter_point();
-		}
-		else if (file == "ntdll.dll") {
-			/*特殊初始化*/
-			if (MainIs64) {
-				GetExportInfoEx1<_IMAGE_NT_HEADERS64>("ntdll.dll", "LdrInitializeThunk");
-			}
-			else {
-				GetExportInfoEx1<_IMAGE_NT_HEADERS>("ntdll.dll", "LdrInitializeThunk");
-			}
 		}
 		else if (std::filesystem::path(file).extension() == ".dll") {
 			using DllEnterPointType = bool(*)(HMODULE, DWORD, LPVOID);
