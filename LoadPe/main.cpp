@@ -24,12 +24,15 @@
 
 	api set
 	https://chromium.googlesource.com/external/github.com/DynamoRIO/dynamorio/+/cronbuild-7.0.17744/core/win32/loader.c
+
+	https://xz.aliyun.com/t/7019
 */
 
 DWORD old_protect = {};
 bool MainIs64 = {};
 
-char* RunPe(const std::string& file);
+char* RunPe(std::string file);
+bool IsPe64Impl(std::string name);
 
 const char* FindPathAry[] = {
 	"C:/Windows/System32/"
@@ -39,50 +42,6 @@ const char* FindPathAry[] = {
 	,kProjectSourceDir"build_windows/bin/Debug/"
 	,"C:/Windows Kits/10/Redist/10.0.18362.0/ucrt/DLLs/x64/"
 };
-
-bool IsPe64Impl(std::string name) {
-	auto file_size = std::filesystem::file_size(name);
-	char* buffer = new char[file_size] {};
-
-	std::ifstream is(name, std::ios::binary);
-	is.read(buffer, file_size);
-	is.close();
-
-	auto dos = (_IMAGE_DOS_HEADER*)buffer;
-	auto pe = (_IMAGE_NT_HEADERS64*)(buffer + dos->e_lfanew);
-
-	bool res = pe->OptionalHeader.Magic == 0x20b;
-	delete[] buffer;
-
-	return res;
-}
-std::string MakePath(std::string name)
-{
-	for (auto path : FindPathAry) {
-		if(std::filesystem::exists(path + name)) {
-			if (IsPe64Impl(path + name) == MainIs64) {
-				name = path + name;
-			}
-		}
-	}
-
-	return name;
-}
-bool IsPe64(std::string name) {
-
-	name = MakePath(name);
-	 
-	if (not std::filesystem::exists(name)) {
-		std::cout << "********** IsPe64 not find name: " << name << std::endl;
-		return false;
-	}
-
-	return IsPe64Impl(name);
-}
-bool IsForwardApi(std::string name) {
-	const char* cmp_str = "api-ms-win";
-	return std::memcmp(name.c_str(), cmp_str, std::strlen(cmp_str)) == 0;
-}
 
 bool
 str_case_prefix(const char* str, const char* pfx)
@@ -313,6 +272,85 @@ map_api_set_dll(const char* name, std::string dependent)
 }
 
 
+bool IsForwardApi(std::string name) {
+	const char* cmp_str = "api-ms-win";
+	return std::memcmp(name.c_str(), cmp_str, std::strlen(cmp_str)) == 0;
+}
+bool IsForwardStr(const char* check_str) {
+	const char* pre_mode_str[] = {
+		"ntdll"
+	};
+	for (auto str : pre_mode_str) {
+		if (str_case_prefix(check_str,str)) {
+			return true;
+		}
+	}
+	for (auto i = 0; i < 10; i++) {
+		bool char_ck = check_str[i] >= 'a' and check_str[i] <= 'z';
+		char_ck |= check_str[i] >= 'A' and check_str[i] <= 'B';
+		char_ck |= check_str[i] >= '0' and check_str[i] <= '9';
+		char_ck |= check_str[i] == '_';
+
+		if (not char_ck) {
+			break;
+		}
+		if (check_str[i] == '.') {
+			throw "unkown forward";
+		}
+	}
+
+	return false;
+}
+std::string MakePath(std::string name)
+{
+	for (auto path : FindPathAry) {
+		if (std::filesystem::exists(path + name)) {
+			if (IsPe64Impl(path + name) == MainIs64) {
+				name = path + name;
+			}
+		}
+	}
+
+	return name;
+}
+bool IsPe64Impl(std::string name) {
+	auto file_size = std::filesystem::file_size(name);
+	char* buffer = new char[file_size] {};
+
+	std::ifstream is(name, std::ios::binary);
+	is.read(buffer, file_size);
+	is.close();
+
+	auto dos = (_IMAGE_DOS_HEADER*)buffer;
+	auto pe = (_IMAGE_NT_HEADERS64*)(buffer + dos->e_lfanew);
+
+	bool res = pe->OptionalHeader.Magic == 0x20b;
+	delete[] buffer;
+
+	return res;
+}
+bool IsPe64(std::string name, std::string origin_name = {}) {
+
+	if (not IsForwardApi(name)) {
+		name = MakePath(name);
+	}
+	else {
+		name = map_api_set_dll(name.c_str(), origin_name);
+		name = MakePath(name);
+	}
+
+	if (not std::filesystem::exists(name)) {
+		std::cout << "********** IsPe64 not find name: " << name << std::endl;
+		return MainIs64;
+	}
+
+	return IsPe64Impl(name);
+}
+
+
+
+
+
 struct ForwardInfo {
 	std::string mode_name = {};
 	std::string func_name = {};
@@ -328,12 +366,7 @@ ForwardInfo AnalysisForwardStr(std::string str, std::string origin_module_name) 
 		cur_str->push_back(c);
 	}
 
-	if (origin_module_name == ret.func_name 
-		and  origin_module_name == "kernel32.dll"
-	) {
-		ret.mode_name = "kernelbase.dll";
-	}
-	else if(origin_module_name == ret.func_name){
+	if(origin_module_name == ret.func_name){
 		throw "import module == orgin module";
 	}
 	else {
@@ -509,15 +542,20 @@ char* LoadModle(std::string name) {
 
 	delete[] buffer;
 
+	std::cout << "module: " << name << " address: " << std::hex << (size_t)virtual_address << std::endl;
+
 	return virtual_address;
 }
 
 template<typename _ModuleTy,typename _SelfPeType>
 void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_descriptor, const std::string& origin_mode_name) {
 
-	auto module_export = GetExportListEx<_SelfPeType>((char*)(virtual_address + import_descriptor.Name));
+	std::vector<ExportFunPack> module_export = {};
 	if (IsForwardApi((char*)(virtual_address + import_descriptor.Name))) {
 		module_export = GetExportListEx<_SelfPeType>(map_api_set_dll((char*)(virtual_address + import_descriptor.Name), origin_mode_name));
+	}
+	else {
+		module_export = GetExportListEx<_SelfPeType>((char*)(virtual_address + import_descriptor.Name));
 	}
 
 	using IMAGE_THUNK_DATA_TYPE = std::conditional_t<std::is_same_v<_SelfPeType, _IMAGE_NT_HEADERS64>, IMAGE_THUNK_DATA64, IMAGE_THUNK_DATA32 >;
@@ -536,17 +574,13 @@ void FixImportModuleImpl(char* virtual_address, IMAGE_IMPORT_DESCRIPTOR& import_
 				return pack.name == (char*)image_import->Name;
 				});
 
-			if ((char*)image_import->Name == std::string("GetSystemTimeAsFileTime")) {
-				int number = 10;
-			}
-
 			/*转发api*/
-			/*if (IsForwardApi((char*)(virtual_address + import_descriptor.Name))) {
+			if (IsForwardStr((char*)iter->virtual_address)) {
 				auto forward_info = AnalysisForwardStr((char*)iter->virtual_address, origin_mode_name); 
 				auto froward_export_info = GetExportInfoEx1<_SelfPeType>(forward_info.mode_name.c_str(), forward_info.func_name.c_str());
 				func_addr = froward_export_info.virtual_address;
 			}
-			else*/ if (iter not_eq module_export.end()) {
+			else if (iter not_eq module_export.end()) {
 				func_addr = iter->virtual_address;
 			}
 			else {
@@ -656,7 +690,12 @@ void FixImageBaseOffset(char* virtual_address, _Ty* pe) {
 	}
 }
 
-char* RunPe(const std::string& file) {
+char* RunPe(std::string file) {
+
+	/*dll 名称转小写*/
+	for (auto& c : file) {
+		c = std::tolower(c);
+	}
 
 	static std::unordered_map<std::string, char*> cache = {};
 
@@ -714,8 +753,19 @@ char* RunPe(const std::string& file) {
 		if (file == kProjectSourceDir"build_windows/bin/Debug/Test.exe") {
 			enter_point();
 		}
-		else {
-			enter_point();
+		else if (file == "ntdll.dll") {
+			/*特殊初始化*/
+			if (MainIs64) {
+				GetExportInfoEx1<_IMAGE_NT_HEADERS64>("ntdll.dll", "LdrInitializeThunk");
+			}
+			else {
+				GetExportInfoEx1<_IMAGE_NT_HEADERS>("ntdll.dll", "LdrInitializeThunk");
+			}
+		}
+		else if (std::filesystem::path(file).extension() == ".dll") {
+			using DllEnterPointType = bool(*)(HMODULE, DWORD, LPVOID);
+			DllEnterPointType dll_enter_point = (DllEnterPointType)(void*)enter_point;
+			dll_enter_point({}, 1, {});
 		}
 		
 	}
